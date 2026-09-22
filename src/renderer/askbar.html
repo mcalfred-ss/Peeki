@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ask Peeki</title>
+  </head>
+  <body>
+    <div id="backdrop" class="backdrop" aria-hidden="true"></div>
+
+    <!-- Thin coach dock (step mode) — window is resized to this only -->
+    <div id="coach" class="coach" hidden>
+      <div class="coach-copy">
+        <div id="coach-index" class="coach-index">1/1</div>
+        <div id="coach-text" class="coach-text"></div>
+      </div>
+      <div class="coach-actions">
+        <button type="button" class="coach-btn" id="btn-coach-back" title="Previous">‹</button>
+        <button type="button" class="coach-btn primary" id="btn-coach-next" title="Next">›</button>
+        <button type="button" class="coach-btn" id="btn-coach-ask" title="Ask again">Ask</button>
+        <button type="button" class="coach-btn" id="btn-coach-done" title="Done">✕</button>
+      </div>
+    </div>
+
+    <div id="stage" class="stage">
+      <div id="panel" class="panel" hidden>
+        <div id="panel-body" class="panel-body"></div>
+        <div id="panel-footer" class="panel-footer" hidden></div>
+      </div>
+
+      <form id="ask-form" class="ask-shell" autocomplete="off">
+        <div class="glow glow-left" aria-hidden="true"></div>
+        <div class="glow glow-right" aria-hidden="true"></div>
+
+        <label class="sr-only" for="ask-input">Ask Peeki</label>
+        <textarea
+          id="ask-input"
+          rows="1"
+          placeholder="Ask anything..."
+          maxlength="2000"
+        ></textarea>
+
+        <div class="toolbar">
+          <div class="toolbar-left">
+            <button type="button" class="icon-btn" id="btn-plus" title="More">
+              <span>+</span>
+            </button>
+            <span id="status-pill" class="status-pill" hidden></span>
+          </div>
+          <div class="toolbar-right">
+            <button type="button" class="chip" id="btn-voice" title="Voice ask">
+              <span class="chip-icon" aria-hidden="true">〰</span>
+              <span id="voice-label">Voice</span>
+            </button>
+            <button type="submit" class="send-btn" id="btn-send" title="Ask Peeki" disabled>
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M3.4 20.6 21 12 3.4 3.4l-.1 6.7L14 12 3.3 13.9z"
+                />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </form>
+    </div>
+    <script type="module" src="./askbar/main.ts"></script>
+  </body>
+</html>
