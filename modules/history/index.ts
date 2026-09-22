@@ -67,7 +67,7 @@ export function createHistoryStore(filePath: string): HistoryModule {
       guidance: input.guidance.trim().slice(0, 4000),
       nextStep: input.nextStep?.trim().slice(0, 500) || undefined,
       screenSummary: input.screenSummary?.trim().slice(0, 500) || undefined,
-      mode: input.mode === 'step' ? 'step' : 'normal',
+      mode: input.mode === 'step' ? 'step' : input.mode === 'auto' ? 'auto' : 'normal',
       stepCount: Math.max(0, input.stepCount ?? 0)
     }
 

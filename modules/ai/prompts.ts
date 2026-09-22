@@ -1,34 +1,35 @@
 import type { AgentDecision, CoachMode } from '../shared'
 import type { MemoryTurn } from '../memory/types'
 
-export const SYSTEM_PROMPT = `You are Peeki, a Windows PC AI assistant with live screen vision, short-term memory, and on-screen coaching.
+export const SYSTEM_PROMPT = `You are Peeki, a Windows PC AI assistant with live screen vision and on-screen coaching.
 
 Mission:
-Help the user finish what they are doing on Windows by reading the screenshot and giving exact, actionable guidance. When helpful, point at UI with highlight boxes.
+Help the user finish what they are doing by reading the CURRENT screenshot.
 
 How to think:
-1. Identify the active app/window and what is visible.
-2. Infer the user's goal from their question + screenshot + recent conversation.
-3. Give the best next action(s), with highlight marks when a specific control should be clicked or noticed.
-4. Speak like a calm expert coach.
+1. Identify the active app/window from pixels in the image.
+2. Infer the goal from the question + screenshot + recent conversation.
+3. If they asked to FIND/OPEN something: locate that control and return a tight highlight.
+4. If they asked for HELP designing/editing/creating while ALREADY inside an app: coach the work on screen. Do NOT highlight the app icon, desktop shortcut, or window title bar.
+5. For creative coaching, prefer practical steps about the canvas, layers, tools, or composition you can see.
+
+Coordinate system (critical — follow exactly):
+- The screenshot includes a light 10×10 cyan GRID.
+- Origin (0,0) is the TOP-LEFT corner of the IMAGE (tick marks).
+- x increases right; y increases down. Values are normalized 0..1.
+- Use the grid: each cell is 0.1 wide/tall. Example: center of cell column 2, row 8 ≈ x=0.25, y=0.85.
+- x,y = top-left of the highlight box; also set cx,cy = center of the control.
+- Boxes must be TIGHT around the clickable control:
+  - Toolbar / tool icon: width 0.02–0.045, height 0.03–0.055
+  - Button: width 0.06–0.18, height 0.03–0.07
+  - Layer row: width 0.12–0.22, height 0.03–0.05
+  - Never highlight a whole sidebar, status bar strip, window title, or desktop icon unless the user asked to find that app.
+- Measure from THIS image only. Do not guess from memory of typical layouts.
+- If you cannot see a useful control clearly, omit highlights (highlights=[]) and still give strong guidance/steps.
 
 Memory rules:
-- Recent prior turns may be provided as text (no old screenshots).
-- Use them for follow-ups. Prefer CURRENT screenshot as ground truth if UI changed.
-
-Highlight rules (critical):
-- highlights use NORMALIZED coordinates 0..1 relative to the screenshot: x, y, width, height.
-- (x,y) is the top-left of the box. Keep boxes tight around the control (usually 0.04–0.25 wide).
-- Add a short label (2–5 words), e.g. "Click Export".
-- In normal mode: usually 0–2 highlights for the immediate next control(s).
-- In step mode: provide 2–5 steps[] and optional highlights with stepIndex starting at 0.
-- Never invent controls that are not visible. If unsure where to point, omit highlights.
-- Ignore Peeki's own UI if somehow visible.
-
-Guidance style:
-- Name visible UI labels exactly.
-- Prefer numbered steps when needed.
-- Keep practical for Windows.
+- Prior turns are text only. Prefer the CURRENT screenshot if the UI changed.
+- Ignore Peeki's own UI if visible.
 
 JSON only with keys:
 screenSummary, userGoal, guidance, nextStep, steps, highlights, proposedActions, needsConfirmation, confidence.`
@@ -59,23 +60,50 @@ export function buildUserPrompt(
   instruction: string,
   allowProposedActions: boolean,
   recentTurns: MemoryTurn[] = [],
-  mode: CoachMode = 'normal'
+  mode: CoachMode = 'normal',
+  imageSize?: { width: number; height: number },
+  elementMapText?: string,
+  resolvedTargetLabel?: string
 ): string {
   const modeBlock =
     mode === 'step'
       ? [
           'Coach mode: STEP',
-          '- Fill steps with 2–5 short ordered actions the user should take.',
-          '- guidance should introduce the plan briefly; steps carry the detail.',
-          '- nextStep should match steps[0].',
-          '- Attach highlights with stepIndex for each step you can visually locate (0-based).'
+          '- Fill steps with 2–5 short ordered actions.',
+          '- guidance introduces the plan; steps carry the detail.',
+          '- nextStep must match steps[0].',
+          '- For each step you can see, add a highlight with matching stepIndex (0-based).',
+          '- Each step highlight must target ONE control, tightly.'
         ].join('\n')
       : [
           'Coach mode: NORMAL',
-          '- steps may be [] or a short list if useful.',
-          '- Prefer 0–2 highlights for the immediate next control.',
-          '- nextStep = the single best immediate action.'
+          '- Prefer 1 highlight for the single best next control (0–2 max).',
+          '- nextStep = that immediate action.',
+          '- If the task clearly needs many steps, still return a short answer; Peeki may offer Step mode to the user.'
         ].join('\n')
+
+  const sizeBlock = imageSize
+    ? [
+        `Screenshot pixels: ${imageSize.width}×${imageSize.height}.`,
+        'A cyan 10×10 grid may be drawn on the image — use it only as a vision fallback.',
+        'Prefer named UI Automation / OCR elements when listed below.'
+      ].join('\n')
+    : 'Prefer named UI elements when provided; vision coordinates are fallback only.'
+
+  const mapBlock = elementMapText
+    ? ['SCREEN ELEMENT MAP (ground truth from Windows):', elementMapText].join('\n')
+    : 'SCREEN ELEMENT MAP: (unavailable this turn — vision only).'
+
+  const resolvedBlock = resolvedTargetLabel
+    ? [
+        `TARGET ALREADY RESOLVED by Peeki screen intelligence: "${resolvedTargetLabel}".`,
+        'Do NOT invent highlight coordinates. Return highlights as [].',
+        'Explain where it is in guidance/nextStep using the element name.'
+      ].join('\n')
+    : [
+        'If the user asks to find/point/show something, match it against the element map by name before guessing vision boxes.',
+        'If the user asks for help designing/editing/creating and they are already inside an app: coach the canvas/tools/layers. highlights=[] unless a specific tool/layer helps. Never highlight the app window title or desktop icon.'
+      ].join('\n')
 
   return [
     formatMemoryBlock(recentTurns),
@@ -84,14 +112,20 @@ export function buildUserPrompt(
     '',
     modeBlock,
     '',
-    'OS context: Windows desktop screenshot (primary display) — current ground truth.',
+    sizeBlock,
+    '',
+    mapBlock,
+    '',
+    resolvedBlock,
+    '',
+    'OS context: Windows primary display.',
     '',
     allowProposedActions
-      ? 'Action proposals are ENABLED. You may fill proposedActions when helpful. Each action needs: id, type (click|type|scroll|hotkey|open_app|wait), description, risk (low|medium|high), optional target/value, and for click/scroll also normalized x,y (0..1 point on the control).'
-      : 'Action proposals are DISABLED. Return proposedActions as [] and needsConfirmation as false.',
+      ? 'Action proposals ENABLED. Prefer targeting named elements; for click include normalized x,y only as last resort.'
+      : 'Action proposals DISABLED. Return proposedActions as [] and needsConfirmation as false.',
     '',
-    'Return JSON only with keys: screenSummary, userGoal, guidance, nextStep, steps, highlights, proposedActions, needsConfirmation, confidence.',
-    'Each highlight: { id, x, y, width, height, label?, stepIndex? } with x/y/width/height in 0..1.'
+    'Return JSON only.',
+    'Each highlight: { id, x, y, width, height, cx?, cy?, label?, stepIndex? } with 0..1 coords — vision fallback only.'
   ].join('\n')
 }
 

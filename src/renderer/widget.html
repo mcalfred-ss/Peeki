@@ -6,9 +6,19 @@
     <title>Peeki</title>
   </head>
   <body>
-    <button id="peeki-orb" type="button" aria-label="Ask Peeki" title="Drag to move · Click to ask · Right-click for menu">
-      <img src="./widget/peeki-logo.jpg" alt="Peeki" draggable="false" />
-    </button>
+    <div id="orb-stack" class="orb-stack">
+      <button id="btn-done" type="button" class="done-chip" title="I finished that step — what’s next?">
+        Done
+      </button>
+      <button
+        id="peeki-orb"
+        type="button"
+        aria-label="Ask Peeki"
+        title="Drag to move · Click to ask · Right-click for menu"
+      >
+        <img src="./widget/peeki-logo.jpg" alt="Peeki" draggable="false" />
+      </button>
+    </div>
     <script type="module" src="./widget/main.ts"></script>
   </body>
 </html>

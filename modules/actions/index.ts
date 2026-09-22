@@ -7,6 +7,7 @@ import type {
 import type { ActionModule } from './types'
 import type { PermissionModule } from '../permissions/types'
 import { mouseClickAt, sendHotkey, scrollAt, typeText } from './windowsInput'
+import { invokeOrClick } from '../screenIntel/invoke'
 
 function riskRank(risk: ProposedAction['risk']): number {
   switch (risk) {
@@ -24,11 +25,25 @@ function riskRank(risk: ProposedAction['risk']): number {
 }
 
 function resolveClickPoint(action: ProposedAction): { x: number; y: number } | null {
+  if (typeof action.physicalX === 'number' && typeof action.physicalY === 'number') {
+    return { x: action.physicalX, y: action.physicalY }
+  }
+  if (action.physicalBounds) {
+    const b = action.physicalBounds
+    return {
+      x: Math.round(b.x + b.width / 2),
+      y: Math.round(b.y + b.height / 2)
+    }
+  }
   if (typeof action.x === 'number' && typeof action.y === 'number') {
     const display = screen.getPrimaryDisplay().bounds
-    return {
-      x: display.x + action.x * display.width,
-      y: display.y + action.y * display.height
+    const dipX = display.x + action.x * display.width
+    const dipY = display.y + action.y * display.height
+    try {
+      return screen.dipToScreenPoint({ x: dipX, y: dipY })
+    } catch {
+      const sf = screen.getPrimaryDisplay().scaleFactor || 1
+      return { x: dipX * sf, y: dipY * sf }
     }
   }
   return null
@@ -37,9 +52,29 @@ function resolveClickPoint(action: ProposedAction): { x: number; y: number } | n
 async function runOne(action: ProposedAction): Promise<void> {
   switch (action.type) {
     case 'click': {
+      // Prefer UIA InvokePattern when we have a verified element
+      if (action.uiaName && action.physicalBounds) {
+        const result = await invokeOrClick({
+          name: action.uiaName,
+          verifiedBounds: action.physicalBounds,
+          source: action.targetSource,
+          allowUnverifiedClick: action.targetSource !== 'vision'
+        })
+        if (!result.ok) {
+          throw new Error(result.message)
+        }
+        return
+      }
+
       const point = resolveClickPoint(action)
       if (!point) {
         throw new Error(`Click action "${action.description}" is missing screen coordinates.`)
+      }
+      // Block vision-only auto-clicks without verified bounds
+      if (action.targetSource === 'vision' && !action.physicalBounds) {
+        throw new Error(
+          'Vision-only coordinates cannot auto-click. Use the highlight to click manually.'
+        )
       }
       await mouseClickAt(point.x, point.y)
       return

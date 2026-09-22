@@ -28,11 +28,14 @@ import { createSettingsStore, loadEnvFile } from './config'
 import { createOverlayController } from './overlay'
 import { createAskBarController } from './askBar'
 import { createHighlightController } from './highlights'
+import { createLookingController } from './looking'
+import { diagnoseDesktopUia, runPhysicalCalibration } from '@modules/screenIntel'
 
 let mainWindow: BrowserWindow | null = null
 let overlayController: ReturnType<typeof createOverlayController> | null = null
 let askBarController: ReturnType<typeof createAskBarController> | null = null
 let highlightController: ReturnType<typeof createHighlightController> | null = null
+let lookingController: ReturnType<typeof createLookingController> | null = null
 let watchService: ReturnType<typeof createWatchService> | null = null
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
@@ -77,6 +80,7 @@ if (!gotSingleInstanceLock) {
       askBarController?.concealForCapture()
       overlayController?.concealForCapture()
       highlightController?.concealForCapture()
+      lookingController?.concealForCapture()
 
       if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
         mainHiddenForCapture = true
@@ -98,6 +102,7 @@ if (!gotSingleInstanceLock) {
         askBarController?.revealAfterCapture()
       }
       highlightController?.revealAfterCapture()
+      lookingController?.revealAfterCapture()
     }
   }
 
@@ -128,7 +133,7 @@ if (!gotSingleInstanceLock) {
         click: () => askBarController?.show()
       },
       {
-        label: 'Watch with me',
+        label: 'On duty (live coach)',
         type: 'checkbox',
         checked: settings.watchEnabled,
         click: (item) => {
@@ -152,6 +157,39 @@ if (!gotSingleInstanceLock) {
         checked: settings.computerControlEnabled,
         click: (item) => {
           settingsStore.update({ computerControlEnabled: Boolean(item.checked) })
+        }
+      },
+      {
+        label: 'Debug screen map',
+        type: 'checkbox',
+        checked: settings.debugScreenIntel,
+        click: (item) => {
+          settingsStore.update({ debugScreenIntel: Boolean(item.checked) })
+        }
+      },
+      {
+        label: 'Diagnose desktop UIA…',
+        click: () => {
+          void (async () => {
+            const result = await diagnoseDesktopUia(12000)
+            console.log(
+              `Diagnose done: ${result.icons.length} icons\n` + result.treeText.slice(0, 4000)
+            )
+          })()
+        }
+      },
+      {
+        label: 'Calibrate physical coords…',
+        click: () => {
+          void runPhysicalCalibration({
+            showMarks: (marks) => {
+              highlightController?.show({
+                highlights: [],
+                absoluteMarks: marks,
+                autoHideMs: 20000
+              })
+            }
+          })
         }
       },
       { type: 'separator' },
@@ -236,7 +274,12 @@ if (!gotSingleInstanceLock) {
     })
 
     ipcMain.handle(IpcChannels.AGENT_RUN, async (_event, request: AgentRunRequest) => {
-      return agent.run(request)
+      lookingController?.show()
+      try {
+        return await agent.run(request)
+      } finally {
+        lookingController?.hide()
+      }
     })
 
     ipcMain.handle(
@@ -331,7 +374,8 @@ if (!gotSingleInstanceLock) {
           enabled: false,
           intervalSec: settingsStore.get().watchIntervalSec,
           lastCheckedAt: null,
-          lastNudgeAt: null
+          lastNudgeAt: null,
+          activeGoal: null
         }
       )
     })
@@ -346,6 +390,65 @@ if (!gotSingleInstanceLock) {
 
     ipcMain.handle(IpcChannels.ORB_MENU, () => {
       openOrbMenu()
+    })
+
+    /** Done chip on the floating logo — verify progress and coach the next tip */
+    ipcMain.handle(IpcChannels.ORB_DONE, async () => {
+      lookingController?.show()
+      try {
+        const result = await agent.run({
+          instruction: 'done',
+          allowProposedActions: settingsStore.get().computerControlEnabled
+        })
+
+        askBarController?.show()
+
+        if (result.ok) {
+          const { decision, capture } = result
+          const payload: WatchNudgePayload = {
+            guidance: decision.guidance,
+            nextStep: decision.nextStep,
+            screenSummary: decision.screenSummary,
+            highlights: decision.highlights,
+            absoluteMarks: decision.absoluteMarks,
+            proposedActions: decision.proposedActions,
+            confidence: decision.confidence
+          }
+          for (const win of BrowserWindow.getAllWindows()) {
+            if (!win.isDestroyed()) {
+              win.webContents.send(IpcChannels.WATCH_NUDGE, payload)
+            }
+          }
+          const hasAbs = (decision.absoluteMarks?.length ?? 0) > 0
+          if (hasAbs || decision.highlights.length > 0) {
+            highlightController?.show({
+              highlights: hasAbs ? [] : decision.highlights,
+              absoluteMarks: decision.absoluteMarks,
+              autoHideMs: 16000,
+              displayBounds: capture.displayBounds,
+              coordMap: capture.coordMap
+            })
+          }
+        } else {
+          const payload: WatchNudgePayload = {
+            guidance: result.error,
+            nextStep: 'Try again or ask Peeki what to do next',
+            screenSummary: '',
+            highlights: [],
+            proposedActions: [],
+            confidence: 0
+          }
+          for (const win of BrowserWindow.getAllWindows()) {
+            if (!win.isDestroyed()) {
+              win.webContents.send(IpcChannels.WATCH_NUDGE, payload)
+            }
+          }
+        }
+
+        return result
+      } finally {
+        lookingController?.hide()
+      }
     })
 
     ipcMain.handle(IpcChannels.SKILLS_LIST, () => skills.list())
@@ -374,6 +477,22 @@ if (!gotSingleInstanceLock) {
       history.clear()
       return history.list(30)
     })
+
+    ipcMain.handle(IpcChannels.UIA_DIAGNOSE_DESKTOP, async () => {
+      return diagnoseDesktopUia(12000)
+    })
+
+    ipcMain.handle(IpcChannels.CALIBRATE_PHYSICAL, async () => {
+      return runPhysicalCalibration({
+        showMarks: (marks) => {
+          highlightController?.show({
+            highlights: [],
+            absoluteMarks: marks,
+            autoHideMs: 20000
+          })
+        }
+      })
+    })
   }
 
   app.whenReady().then(() => {
@@ -382,6 +501,7 @@ if (!gotSingleInstanceLock) {
 
     askBarController = createAskBarController()
     highlightController = createHighlightController()
+    lookingController = createLookingController()
 
     overlayController = createOverlayController({
       getSettings: () => settingsStore.get(),
@@ -393,15 +513,19 @@ if (!gotSingleInstanceLock) {
       capture,
       ai,
       privacy,
+      memory,
       getSettings: () => settingsStore.get(),
       ...captureHooks,
       onStateChange: (enabled) => broadcastWatchState(enabled),
-      onNudge: (decision) => {
+      onLookingStart: () => lookingController?.show(),
+      onLookingEnd: () => lookingController?.hide(),
+      onNudge: (decision, captureShot) => {
         const payload: WatchNudgePayload = {
           guidance: decision.guidance,
           nextStep: decision.nextStep,
           screenSummary: decision.screenSummary,
           highlights: decision.highlights,
+          absoluteMarks: decision.absoluteMarks,
           proposedActions: decision.proposedActions,
           confidence: decision.confidence
         }
@@ -411,10 +535,14 @@ if (!gotSingleInstanceLock) {
             win.webContents.send(IpcChannels.WATCH_NUDGE, payload)
           }
         }
-        if (decision.highlights.length > 0) {
+        const hasAbs = (decision.absoluteMarks?.length ?? 0) > 0
+        if (hasAbs || decision.highlights.length > 0) {
           highlightController?.show({
-            highlights: decision.highlights,
-            autoHideMs: 12000
+            highlights: hasAbs ? [] : decision.highlights,
+            absoluteMarks: decision.absoluteMarks,
+            autoHideMs: 14000,
+            displayBounds: captureShot.displayBounds,
+            coordMap: captureShot.coordMap
           })
         }
       }
@@ -443,6 +571,7 @@ if (!gotSingleInstanceLock) {
 
   app.on('before-quit', () => {
     watchService?.stop()
+    lookingController?.destroy()
     askBarController?.destroy()
     overlayController?.destroy()
     highlightController?.destroy()

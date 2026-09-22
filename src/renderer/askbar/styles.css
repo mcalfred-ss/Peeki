@@ -154,6 +154,20 @@ body.is-coach .stage {
   min-width: 0;
 }
 
+.status-pill {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--chip-border);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--muted);
+  font: 500 0.72rem/1.2 var(--font);
+  letter-spacing: 0.01em;
+}
+
 .icon-btn,
 .chip,
 .send-btn,
@@ -208,15 +222,6 @@ body.is-coach .stage {
 .chip-icon {
   color: var(--muted);
   font-size: 0.78rem;
-}
-
-.status-pill {
-  font-size: 0.74rem;
-  color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 140px;
 }
 
 .send-btn {
@@ -287,6 +292,18 @@ body.is-coach .stage {
   color: var(--muted);
   font-size: 0.78rem;
   white-space: pre-wrap;
+  line-height: 1.35;
+}
+
+.panel-meta.mode-suggest {
+  margin-top: 12px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  border-top: none;
+  color: var(--text, #eee);
+  opacity: 0.95;
+  font-size: 0.8rem;
 }
 
 .panel-footer {

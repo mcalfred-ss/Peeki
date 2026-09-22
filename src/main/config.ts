@@ -39,7 +39,7 @@ function isOverlayPosition(value: unknown): value is AppSettings['overlayPositio
 }
 
 function asCoachMode(value: unknown, fallback: CoachMode): CoachMode {
-  return value === 'step' || value === 'normal' ? value : fallback
+  return value === 'step' || value === 'normal' || value === 'auto' ? value : fallback
 }
 
 function mergeSettings(raw: unknown): AppSettings {
@@ -84,7 +84,11 @@ function mergeSettings(raw: unknown): AppSettings {
     computerControlEnabled:
       typeof obj.computerControlEnabled === 'boolean'
         ? obj.computerControlEnabled
-        : base.computerControlEnabled
+        : base.computerControlEnabled,
+    debugScreenIntel:
+      typeof obj.debugScreenIntel === 'boolean'
+        ? obj.debugScreenIntel
+        : base.debugScreenIntel
   }
 }
 

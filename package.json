@@ -10,6 +10,7 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "selfcheck": "npx --yes tsx scripts/selfcheck.ts",
     "dist": "npm run build && electron-builder --win"
   },
   "dependencies": {

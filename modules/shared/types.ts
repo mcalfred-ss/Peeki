@@ -7,7 +7,19 @@ export type ActionType = 'click' | 'type' | 'scroll' | 'hotkey' | 'open_app' | '
 
 export type ActionRisk = 'low' | 'medium' | 'high'
 
-export type CoachMode = 'normal' | 'step'
+export type CoachMode = 'auto' | 'normal' | 'step'
+
+/** Soft prompt when another mode would help the user more. */
+export type ModeSuggestion = {
+  recommended: 'normal' | 'step'
+  reason: string
+  /** Show Switch / Keep buttons in the ask bar */
+  askUser: boolean
+  /** Also suggest turning Act on (click/type) */
+  suggestAct?: boolean
+  /** Suggest staying awake as live coach */
+  suggestOnDuty?: boolean
+}
 
 export type ProposedAction = {
   id: string
@@ -19,6 +31,20 @@ export type ProposedAction = {
   /** Normalized click point 0..1 (for click actions) */
   x?: number
   y?: number
+  /** Absolute physical-pixel click (preferred when from UIA/OCR) */
+  physicalX?: number
+  physicalY?: number
+  /** Verified physical bounds for InvokePattern / center-click */
+  physicalBounds?: {
+    x: number
+    y: number
+    width: number
+    height: number
+  }
+  /** UIA element name for InvokePattern */
+  uiaName?: string
+  /** How coordinates were obtained — vision-only must not auto-click */
+  targetSource?: 'uia' | 'ocr' | 'vision' | 'desktop' | 'taskbar'
 }
 
 /** Normalized highlight box (0..1 relative to the screenshot) */
@@ -33,6 +59,34 @@ export type ScreenHighlight = {
   stepIndex?: number
 }
 
+export type HighlightsShowPayload = {
+  highlights: ScreenHighlight[]
+  /** Only show marks for this step index when set */
+  stepIndex?: number
+  autoHideMs?: number
+  /** Prefer the capture's display bounds for correct DPI mapping */
+  displayBounds?: {
+    x: number
+    y: number
+    width: number
+    height: number
+  }
+  /** Screenshot content rect inside displayBounds (DIP) */
+  coordMap?: {
+    offsetX: number
+    offsetY: number
+    width: number
+    height: number
+  }
+  /**
+   * Preferred: absolute physical-pixel marks from UI Automation / OCR.
+   * When present, these are painted instead of (or in addition to) normalized highlights.
+   */
+  absoluteMarks?: import('./screenIntel').AbsoluteMark[]
+  /** When true, show A/B coord markers and verbose overlay diagnostics */
+  debugOverlay?: boolean
+}
+
 export type AgentDecision = {
   screenSummary: string
   userGoal: string
@@ -44,6 +98,16 @@ export type AgentDecision = {
   proposedActions: ProposedAction[]
   needsConfirmation: boolean
   confidence: number
+  /** Absolute physical-pixel marks from UIA/OCR (preferred over highlights) */
+  absoluteMarks?: import('./screenIntel').AbsoluteMark[]
+  /** How the primary target was resolved */
+  targetSource?: 'uia' | 'ocr' | 'vision' | 'desktop' | 'taskbar'
+  /** Developer debug dump of the screen element map */
+  debugMapText?: string
+  /** When set, ask bar can offer switching coach mode */
+  modeSuggestion?: ModeSuggestion
+  /** True when answered from UIA/map without an OpenAI call */
+  usedLocalAnswer?: boolean
 }
 
 export type ScreenCapture = {
@@ -56,6 +120,23 @@ export type ScreenCapture = {
   capturedAt: string
   /** True when privacy blur was applied before AI */
   privacyApplied?: boolean
+  /** Display bounds in DIP used for overlay mapping */
+  displayBounds?: {
+    x: number
+    y: number
+    width: number
+    height: number
+  }
+  /**
+   * Where the screenshot content sits inside displayBounds (DIP).
+   * Used when capture aspect ≠ display aspect so marks stay aligned.
+   */
+  coordMap?: {
+    offsetX: number
+    offsetY: number
+    width: number
+    height: number
+  }
 }
 
 export type AgentRunRequest = {
@@ -137,6 +218,8 @@ export type AppSettings = {
   watchIntervalSec: number
   /** Allow OS click/type/scroll after explicit confirmation */
   computerControlEnabled: boolean
+  /** Show screen-element-map debug dump in the coach panel */
+  debugScreenIntel: boolean
 }
 
 export const DEFAULT_PRIVACY_ZONES: PrivacyZone[] = [
@@ -168,17 +251,18 @@ export const DEFAULT_PRIVACY_ZONES: PrivacyZone[] = [
 
 export const DEFAULT_SETTINGS: AppSettings = {
   model: 'gpt-4.1-mini',
-  maxCaptureWidth: 1400,
+  maxCaptureWidth: 1920,
   sendScreenByDefault: true,
   allowProposedActions: false,
   overlayVisible: true,
   overlayPosition: null,
-  coachMode: 'normal',
+  coachMode: 'auto',
   privacyBlurEnabled: false,
   voiceReplyEnabled: true,
   watchEnabled: false,
-  watchIntervalSec: 15,
-  computerControlEnabled: true
+  watchIntervalSec: 12,
+  computerControlEnabled: true,
+  debugScreenIntel: false
 }
 
 export const TEACH_PRESETS = [
@@ -220,9 +304,11 @@ export const IpcChannels = {
   HIGHLIGHTS_SHOW: 'highlights:show',
   HIGHLIGHTS_HIDE: 'highlights:hide',
   HIGHLIGHTS_SET_STEP: 'highlights:set-step',
+  LOOKING_STATE: 'looking:state',
   WATCH_TOGGLE: 'watch:toggle',
   WATCH_GET: 'watch:get',
   ORB_MENU: 'orb:menu',
+  ORB_DONE: 'orb:done',
   WATCH_STATE: 'watch:state',
   WATCH_NUDGE: 'watch:nudge',
   SKILLS_LIST: 'skills:list',
@@ -230,7 +316,9 @@ export const IpcChannels = {
   SKILLS_DELETE: 'skills:delete',
   SKILLS_GET: 'skills:get',
   HISTORY_LIST: 'history:list',
-  HISTORY_CLEAR: 'history:clear'
+  HISTORY_CLEAR: 'history:clear',
+  UIA_DIAGNOSE_DESKTOP: 'uia:diagnose-desktop',
+  CALIBRATE_PHYSICAL: 'calib:physical'
 } as const
 
 export type AppStatus = {
@@ -250,6 +338,7 @@ export type WatchStatus = {
   intervalSec: number
   lastCheckedAt: string | null
   lastNudgeAt: string | null
+  activeGoal?: string | null
 }
 
 export type WatchNudgePayload = {
@@ -257,6 +346,7 @@ export type WatchNudgePayload = {
   nextStep?: string
   screenSummary: string
   highlights: ScreenHighlight[]
+  absoluteMarks?: import('./screenIntel').AbsoluteMark[]
   proposedActions: ProposedAction[]
   confidence: number
 }
@@ -267,13 +357,6 @@ export type OverlayDragPayload = {
 }
 
 export type AskBarLayout = 'ask' | 'coach'
-
-export type HighlightsShowPayload = {
-  highlights: ScreenHighlight[]
-  /** Only show marks for this step index when set */
-  stepIndex?: number
-  autoHideMs?: number
-}
 
 /** Saved guided path — step text + optional highlight targets */
 export type SavedSkill = {

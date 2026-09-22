@@ -34,9 +34,10 @@ export function Composer({
         placeholder="e.g. What am I looking at? How do I export this file?"
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+          if (e.nativeEvent.isComposing) return
+          if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault()
-            onRun()
+            if (!busy && value.trim()) onRun()
           }
         }}
       />

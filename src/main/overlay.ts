@@ -2,7 +2,8 @@ import { BrowserWindow, screen } from 'electron'
 import { join } from 'path'
 import {
   createOverlayPlacement,
-  OVERLAY_SIZE
+  OVERLAY_WIDTH,
+  OVERLAY_HEIGHT
 } from '@modules/overlay'
 import type { AppSettings, OverlayPosition } from '@modules/shared'
 
@@ -46,8 +47,8 @@ export function createOverlayController(deps: {
     const start = resolveStartPosition()
 
     overlay = new BrowserWindow({
-      width: OVERLAY_SIZE,
-      height: OVERLAY_SIZE,
+      width: OVERLAY_WIDTH,
+      height: OVERLAY_HEIGHT,
       x: start.x,
       y: start.y,
       frame: false,

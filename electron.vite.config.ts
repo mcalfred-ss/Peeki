@@ -33,7 +33,8 @@ export default defineConfig({
           index: resolve('src/renderer/index.html'),
           widget: resolve('src/renderer/widget.html'),
           askbar: resolve('src/renderer/askbar.html'),
-          highlight: resolve('src/renderer/highlight.html')
+          highlight: resolve('src/renderer/highlight.html'),
+          looking: resolve('src/renderer/looking.html')
         }
       }
     }

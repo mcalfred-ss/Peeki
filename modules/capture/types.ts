@@ -6,5 +6,7 @@ import type { ScreenCapture } from '../shared'
  */
 export interface CaptureModule {
   capturePrimaryDisplay(maxWidth?: number): Promise<ScreenCapture>
+  /** Capture the display under the cursor (multi-monitor safe). */
+  captureActiveDisplay(maxWidth?: number): Promise<ScreenCapture>
   captureDisplay(displayId: string, maxWidth?: number): Promise<ScreenCapture>
 }

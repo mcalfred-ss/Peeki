@@ -4,6 +4,7 @@ import type {
   AskBarLayout,
   CoachMode,
   HistoryEntry,
+  ModeSuggestion,
   ProposedAction,
   SavedSkill,
   ScreenHighlight
@@ -27,7 +28,6 @@ const sendBtn = requireEl('btn-send', (el): el is HTMLButtonElement => el instan
 const plusBtn = requireEl('btn-plus', (el): el is HTMLButtonElement => el instanceof HTMLButtonElement)
 const voiceBtn = requireEl('btn-voice', (el): el is HTMLButtonElement => el instanceof HTMLButtonElement)
 const voiceLabel = requireEl('voice-label', (el): el is HTMLElement => el instanceof HTMLElement)
-const statusPill = requireEl('status-pill', (el): el is HTMLElement => el instanceof HTMLElement)
 const backdrop = requireEl('backdrop', (el): el is HTMLElement => el instanceof HTMLElement)
 const panel = requireEl('panel', (el): el is HTMLElement => el instanceof HTMLElement)
 const panelBody = requireEl('panel-body', (el): el is HTMLElement => el instanceof HTMLElement)
@@ -51,6 +51,7 @@ const coachDone = requireEl(
   'btn-coach-done',
   (el): el is HTMLButtonElement => el instanceof HTMLButtonElement
 )
+const statusPill = requireEl('status-pill', (el): el is HTMLElement => el instanceof HTMLElement)
 
 type SpeechRec = {
   continuous: boolean
@@ -76,11 +77,13 @@ type LastAnswer = {
 let busy = false
 let hasApiKey = true
 let memoryTurnCount = 0
-let coachMode: CoachMode = 'normal'
+let coachMode: CoachMode = 'auto'
 let privacyOn = false
 let actOn = false
+let onDuty = false
 let computerControlEnabled = true
 let voiceReplyEnabled = true
+let debugScreenIntel = false
 let listening = false
 let steps: string[] = []
 let stepIndex = 0
@@ -92,7 +95,8 @@ let layout: AskBarLayout = 'ask'
 let resultHideTimer: number | null = null
 
 function syncSendEnabled(): void {
-  sendBtn.disabled = busy || !hasApiKey || input.value.trim().length === 0
+  // Allow asks without API key — inventory / UIA locate work locally
+  sendBtn.disabled = busy || input.value.trim().length === 0
 }
 
 function syncVoiceLabel(): void {
@@ -102,10 +106,11 @@ function syncVoiceLabel(): void {
 
 function syncStatusPill(): void {
   const bits: string[] = []
-  if (coachMode === 'step') bits.push('Step')
-  if (privacyOn) bits.push('Privacy')
+  if (onDuty) bits.push('On duty')
+  if (coachMode === 'auto') bits.push('Auto')
+  else if (coachMode === 'step') bits.push('Step')
+  else bits.push('Normal')
   if (actOn) bits.push('Act')
-  if (memoryTurnCount > 0) bits.push(`Mem ${memoryTurnCount}`)
   if (bits.length === 0) {
     statusPill.hidden = true
     statusPill.textContent = ''
@@ -113,6 +118,61 @@ function syncStatusPill(): void {
   }
   statusPill.hidden = false
   statusPill.textContent = bits.join(' · ')
+}
+
+async function setOnDuty(enabled: boolean, announce = true): Promise<void> {
+  onDuty = enabled
+  try {
+    await window.peeki.toggleWatch(enabled)
+    await window.peeki.updateSettings({ watchEnabled: enabled })
+  } catch {
+    // keep local state
+  }
+  syncStatusPill()
+  if (announce) {
+    showResult(
+      enabled
+        ? 'On duty — I’ll watch your screen and live-coach as you work. Stay quiet when you’re fine.'
+        : 'Off duty — I won’t watch until you wake me again.',
+      'info'
+    )
+  }
+}
+
+function cycleCoachMode(): CoachMode {
+  if (coachMode === 'auto') return 'normal'
+  if (coachMode === 'normal') return 'step'
+  return 'auto'
+}
+
+function coachModeLabel(mode: CoachMode): string {
+  switch (mode) {
+    case 'auto':
+      return 'Auto'
+    case 'normal':
+      return 'Normal'
+    case 'step':
+      return 'Step'
+    default: {
+      const _exhaustive: never = mode
+      return _exhaustive
+    }
+  }
+}
+
+function coachModeHint(mode: CoachMode): string {
+  switch (mode) {
+    case 'auto':
+      return 'Picks Normal or Step from your question'
+    case 'normal':
+      return 'Quick single answer + highlight'
+    case 'step':
+      return 'Guided walkthrough, one step at a time'
+    default: {
+      const _exhaustive: never = mode
+      return _exhaustive
+    }
+  }
 }
 
 function autofocus(): void {
@@ -210,7 +270,12 @@ async function endCoaching(hideBar = true): Promise<void> {
   }
 }
 
-function showResult(text: string, kind: 'ok' | 'error' | 'info' = 'ok', meta?: string): void {
+function showResult(
+  text: string,
+  kind: 'ok' | 'error' | 'info' = 'ok',
+  meta?: string,
+  suggestion?: ModeSuggestion | null
+): void {
   clearResultTimer()
   void enterAskLayout()
   hidePanel()
@@ -225,8 +290,60 @@ function showResult(text: string, kind: 'ok' | 'error' | 'info' = 'ok', meta?: s
     panelBody.appendChild(metaEl)
   }
 
-  if (kind === 'ok' && lastAnswer) {
-    panelFooter.hidden = false
+  if (suggestion?.askUser) {
+    const tip = document.createElement('div')
+    tip.className = 'panel-meta mode-suggest'
+    tip.textContent = suggestion.reason
+    panelBody.appendChild(tip)
+  }
+
+  panelFooter.hidden = false
+  panelFooter.replaceChildren()
+
+  if (suggestion?.askUser) {
+    if (suggestion.suggestOnDuty && !onDuty) {
+      const dutyBtn = chip('Go on duty', { primary: !suggestion.suggestAct })
+      dutyBtn.addEventListener('click', () => {
+        void setOnDuty(true)
+      })
+      panelFooter.append(dutyBtn)
+    }
+    if (suggestion.recommended === 'step' || suggestion.recommended === 'normal') {
+      const needsModeSwitch =
+        (suggestion.recommended === 'step' && coachMode !== 'step') ||
+        (suggestion.recommended === 'normal' && coachMode === 'step')
+      if (needsModeSwitch && !suggestion.suggestOnDuty) {
+        const switchBtn = chip(
+          suggestion.recommended === 'step' ? 'Switch to Step' : 'Switch to Normal',
+          { primary: true }
+        )
+        switchBtn.addEventListener('click', () => {
+          coachMode = suggestion.recommended
+          void window.peeki.updateSettings({ coachMode })
+          syncStatusPill()
+          hidePanel()
+          showResult(`Mode set to ${coachModeLabel(coachMode)}. Ask again anytime.`, 'info')
+        })
+        panelFooter.append(switchBtn)
+      }
+    }
+    if (suggestion.suggestAct && !actOn) {
+      const actBtn = chip('Turn on Act', { primary: true })
+      actBtn.addEventListener('click', () => {
+        actOn = true
+        void window.peeki.updateSettings({ allowProposedActions: true })
+        syncStatusPill()
+        showResult('Act is on. Peeki will ask before clicking.', 'info')
+      })
+      panelFooter.append(actBtn)
+    }
+    const keepBtn = chip('Not now')
+    keepBtn.addEventListener('click', () => {
+      hidePanel()
+      void window.peeki.hideAskBar()
+    })
+    panelFooter.append(keepBtn)
+  } else if (kind === 'ok' && lastAnswer) {
     const saveBtn = chip('Save')
     const dismiss = chip('Got it', { primary: true })
     saveBtn.addEventListener('click', () => void saveCurrentSkill())
@@ -235,18 +352,21 @@ function showResult(text: string, kind: 'ok' | 'error' | 'info' = 'ok', meta?: s
       void window.peeki.hideAskBar()
     })
     panelFooter.append(saveBtn, dismiss)
+  } else {
+    panelFooter.hidden = true
   }
 
-  // Auto-dismiss short info toasts so the screen stays clear
+  // Keep suggestion visible longer; short info toasts dismiss quickly
   if (kind === 'info' || kind === 'ok') {
+    const ms = suggestion?.askUser ? 20000 : kind === 'info' ? 2800 : 8000
     resultHideTimer = window.setTimeout(() => {
       if (panelKind === 'result' && layout === 'ask' && steps.length === 0) {
         hidePanel()
-        if (kind === 'info') {
+        if (kind === 'info' && !suggestion?.askUser) {
           void window.peeki.hideAskBar()
         }
       }
-    }, kind === 'info' ? 2800 : 8000)
+    }, ms)
   }
 }
 
@@ -360,12 +480,29 @@ function renderMenu(): void {
   togglesLabel.textContent = 'Options'
   toggles.append(
     togglesLabel,
-    menuRow('Step mode', coachMode === 'step' ? 'On' : 'Off', coachMode === 'step', () => {
-      coachMode = coachMode === 'step' ? 'normal' : 'step'
-      void window.peeki.updateSettings({ coachMode })
-      syncStatusPill()
-      renderMenu()
+    menuRow('On duty', onDuty ? 'Live coaching' : 'Off', onDuty, () => {
+      void setOnDuty(!onDuty, false).then(() => {
+        renderMenu()
+        showResult(
+          onDuty
+            ? 'On duty — watching your screen and coaching live.'
+            : 'Off duty.',
+          'info'
+        )
+      })
     }),
+    menuRow(
+      'Coach mode',
+      coachModeLabel(coachMode),
+      coachMode !== 'auto',
+      () => {
+        coachMode = cycleCoachMode()
+        void window.peeki.updateSettings({ coachMode })
+        syncStatusPill()
+        renderMenu()
+        showResult(coachModeHint(coachMode), 'info')
+      }
+    ),
     menuRow('Privacy blur', privacyOn ? 'On' : 'Off', privacyOn, () => {
       privacyOn = !privacyOn
       void window.peeki.updateSettings({ privacyBlurEnabled: privacyOn })
@@ -583,16 +720,37 @@ function appendHistoryItem(entry: HistoryEntry): void {
 
 async function showHighlightsForDecision(
   decision: AgentDecision,
-  mode: CoachMode
+  mode: CoachMode,
+  captureMeta?: {
+    displayBounds?: {
+      x: number
+      y: number
+      width: number
+      height: number
+    }
+    coordMap?: {
+      offsetX: number
+      offsetY: number
+      width: number
+      height: number
+    }
+  },
+  debugOverlay = false
 ): Promise<void> {
-  if (!decision.highlights.length) {
+  const hasAbs = (decision.absoluteMarks?.length ?? 0) > 0
+  const hasNorm = decision.highlights.length > 0
+  if (!hasAbs && !hasNorm) {
     await window.peeki.hideHighlights()
     return
   }
   await window.peeki.showHighlights({
-    highlights: decision.highlights,
-    stepIndex: mode === 'step' ? 0 : undefined,
-    autoHideMs: mode === 'step' ? 0 : 14000
+    highlights: hasAbs ? [] : decision.highlights,
+    absoluteMarks: decision.absoluteMarks,
+    stepIndex: !hasAbs && mode === 'step' ? 0 : undefined,
+    autoHideMs: mode === 'step' ? 0 : 16000,
+    displayBounds: captureMeta?.displayBounds,
+    coordMap: captureMeta?.coordMap,
+    debugOverlay
   })
 }
 
@@ -604,6 +762,8 @@ async function refreshSettings(): Promise<void> {
     voiceReplyEnabled = settings.voiceReplyEnabled
     actOn = settings.allowProposedActions
     computerControlEnabled = settings.computerControlEnabled
+    debugScreenIntel = Boolean(settings.debugScreenIntel)
+    onDuty = Boolean(settings.watchEnabled)
   } catch {
     // keep defaults
   }
@@ -618,11 +778,10 @@ async function refreshApiStatus(): Promise<void> {
     privacyOn = status.privacyBlurEnabled
     coachMode = status.coachMode
     computerControlEnabled = status.computerControlEnabled
+    onDuty = Boolean(status.watchEnabled)
     if (!hasApiKey) {
-      showResult(
-        'Add OPENAI_API_KEY to .env and restart Peeki.',
-        'error'
-      )
+      // Non-blocking: local answers still work
+      console.info('No OpenAI key — local screen answers still work; vision needs a key.')
     }
   } catch {
     hasApiKey = false
@@ -635,9 +794,10 @@ async function submitAsk(presetInstruction?: string): Promise<void> {
   const instruction = (presetInstruction ?? input.value).trim()
   if (!instruction || busy) return
 
+  // Local answers (inventory / UIA locate) work without an API key.
+  // Vision / coaching still need one — the agent returns a clear error then.
   if (!hasApiKey) {
     await refreshApiStatus()
-    if (!hasApiKey) return
   }
 
   await enterAskLayout()
@@ -677,7 +837,18 @@ async function submitAsk(presetInstruction?: string): Promise<void> {
       screenSummary: decision.screenSummary
     }
 
-    await showHighlightsForDecision(decision, mode)
+    await showHighlightsForDecision(
+      decision,
+      mode,
+      {
+        displayBounds: response.capture.displayBounds,
+        coordMap: response.capture.coordMap
+      },
+      debugScreenIntel
+    )
+
+    const suggestion = decision.modeSuggestion
+    const localTag = decision.usedLocalAnswer ? ' · free (no AI)' : ''
 
     if (decision.proposedActions.length > 0) {
       showSafety(decision.proposedActions)
@@ -687,16 +858,27 @@ async function submitAsk(presetInstruction?: string): Promise<void> {
       stepIndex = 0
       speak(decision.steps[0] ?? decision.guidance)
       await startCoaching()
+      if (suggestion?.askUser) {
+        // After coach starts, still surface mode pin offer briefly in panel
+        // Keep coaching primary — suggestion can wait for next ask via menu
+      }
     } else if (decision.steps.length > 1) {
-      // Multi-step answer even in normal mode → coach dock
       steps = decision.steps
       stepIndex = 0
       speak(decision.steps[0] ?? decision.guidance)
       await startCoaching()
     } else {
-      // Short answer: leave highlights, dismiss ask UI quickly
       speak(decision.nextStep || decision.guidance)
-      showResult(decision.guidance, 'ok', decision.nextStep ? `Next: ${decision.nextStep}` : undefined)
+      const debugNote =
+        debugScreenIntel && decision.debugMapText
+          ? `\n\n—— DEBUG ——\n${decision.debugMapText}`
+          : ''
+      showResult(
+        decision.guidance + debugNote,
+        'ok',
+        (decision.nextStep ? `Next: ${decision.nextStep}` : 'Done') + localTag,
+        suggestion
+      )
     }
 
     input.value = ''
@@ -814,9 +996,14 @@ input.addEventListener('input', () => {
 })
 
 input.addEventListener('keydown', (event) => {
-  if (event.key === 'Enter' && !event.shiftKey) {
+  if (event.isComposing) return
+  if ((event.key === 'Enter' || event.code === 'Enter' || event.keyCode === 13) && !event.shiftKey) {
     event.preventDefault()
-    void submitAsk()
+    event.stopPropagation()
+    if (!busy && input.value.trim()) {
+      void submitAsk()
+    }
+    return
   }
   if (event.key === 'Escape') {
     void window.peeki.hideAskBar()
@@ -830,6 +1017,16 @@ backdrop.addEventListener('mousedown', () => {
 })
 
 window.addEventListener('keydown', (event) => {
+  if (event.isComposing) return
+  if (layout === 'coach' && (event.key === 'Enter' || event.code === 'Enter')) {
+    event.preventDefault()
+    if (stepIndex < steps.length - 1) {
+      coachNext.click()
+    } else {
+      coachDone.click()
+    }
+    return
+  }
   if (event.key === 'Escape') {
     if (layout === 'coach') {
       void endCoaching(true)
@@ -868,13 +1065,26 @@ window.peeki.onWatchNudge((payload) => {
     showResult(
       payload.guidance,
       'info',
-      payload.nextStep ? `Next: ${payload.nextStep}` : undefined
+      payload.nextStep ? `Coach tip · ${payload.nextStep}` : 'Live coach'
     )
     speak(payload.guidance)
+    const hasAbs = (payload.absoluteMarks?.length ?? 0) > 0
+    if (hasAbs || payload.highlights.length > 0) {
+      await window.peeki.showHighlights({
+        highlights: hasAbs ? [] : payload.highlights,
+        absoluteMarks: payload.absoluteMarks,
+        autoHideMs: 14000
+      })
+    }
     if (payload.proposedActions.length > 0 && actOn) {
       showSafety(payload.proposedActions)
     }
   })()
+})
+
+window.peeki.onWatchState(({ enabled }) => {
+  onDuty = enabled
+  syncStatusPill()
 })
 
 syncSendEnabled()

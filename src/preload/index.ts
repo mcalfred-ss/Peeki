@@ -83,6 +83,9 @@ const peekiApi = {
 
   openOrbMenu: (): Promise<void> => ipcRenderer.invoke(IpcChannels.ORB_MENU),
 
+  /** Floating Done — tells Peeki the tip is finished and asks what is next */
+  reportDone: (): Promise<AgentRunResult> => ipcRenderer.invoke(IpcChannels.ORB_DONE),
+
   listSkills: (): Promise<SavedSkill[]> => ipcRenderer.invoke(IpcChannels.SKILLS_LIST),
 
   getSkill: (id: string): Promise<SavedSkill | null> =>
@@ -123,6 +126,24 @@ const peekiApi = {
     callback: (payload: {
       highlights: ScreenHighlight[]
       display: { width: number; height: number } | null
+      coordMap?: {
+        offsetX: number
+        offsetY: number
+        width: number
+        height: number
+      }
+      displayOrigin?: { x: number; y: number }
+      absoluteMarks?: Array<{
+        left: number
+        top: number
+        width: number
+        height: number
+        label?: string
+        style: 'rect' | 'circle' | 'arrow'
+        debugKind?: 'a-physical' | 'b-already-dip' | 'normal'
+        id?: string
+      }>
+      debugOverlay?: boolean
     }) => void
   ): (() => void) => {
     const listener = (
@@ -130,6 +151,24 @@ const peekiApi = {
       payload: {
         highlights: ScreenHighlight[]
         display: { width: number; height: number } | null
+        coordMap?: {
+          offsetX: number
+          offsetY: number
+          width: number
+          height: number
+        }
+        displayOrigin?: { x: number; y: number }
+        absoluteMarks?: Array<{
+          left: number
+          top: number
+          width: number
+          height: number
+          label?: string
+          style: 'rect' | 'circle' | 'arrow'
+          debugKind?: 'a-physical' | 'b-already-dip' | 'normal'
+          id?: string
+        }>
+        debugOverlay?: boolean
       }
     ): void => {
       callback(payload)
@@ -137,6 +176,16 @@ const peekiApi = {
     ipcRenderer.on(HIGHLIGHTS_PAINT_EVENT, listener)
     return () => {
       ipcRenderer.removeListener(HIGHLIGHTS_PAINT_EVENT, listener)
+    }
+  },
+
+  onLookingState: (callback: (payload: { active: boolean }) => void): (() => void) => {
+    const listener = (_event: unknown, payload: { active: boolean }): void => {
+      callback(payload)
+    }
+    ipcRenderer.on(IpcChannels.LOOKING_STATE, listener)
+    return () => {
+      ipcRenderer.removeListener(IpcChannels.LOOKING_STATE, listener)
     }
   },
 
